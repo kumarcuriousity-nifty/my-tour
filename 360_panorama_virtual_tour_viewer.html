@@ -1,0 +1,207 @@
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<div style="padding: 1rem 0;">
+  <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-lg); border: 0.5px solid var(--color-border-tertiary); overflow: hidden;">
+
+    <div style="position: relative; width: 100%; height: 380px; background: #111; overflow: hidden;" id="viewer-wrap">
+      <canvas id="pano-canvas" style="width:100%;height:100%;display:block;"></canvas>
+
+      <div id="overlay-msg" style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center;padding:1rem;pointer-events:none;">
+        <div style="font-size:48px;margin-bottom:12px;">360</div>
+        <div style="font-size:15px;font-weight:500;margin-bottom:6px;">Load a 360 panorama image</div>
+        <div style="font-size:13px;opacity:0.6;">Use the button below to load your equirectangular photo</div>
+      </div>
+
+      <div id="drag-hint" style="display:none;position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.55);color:#fff;font-size:12px;padding:5px 14px;border-radius:20px;pointer-events:none;">
+        drag to look around · scroll to zoom
+      </div>
+
+      <div id="hotspot-layer" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></div>
+    </div>
+
+    <div style="padding: 14px 16px; border-top: 0.5px solid var(--color-border-tertiary); display:flex; flex-wrap:wrap; gap:10px; align-items:center; background: var(--color-background-primary);">
+      <label style="cursor:pointer;">
+        <input type="file" accept="image/*" id="img-input" style="display:none;">
+        <div id="load-btn" style="font-size:13px;font-weight:500;padding:7px 16px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:var(--color-background-secondary);cursor:pointer;color:var(--color-text-primary);">
+          Load 360 Image
+        </div>
+      </label>
+
+      <button onclick="resetView()" style="font-size:13px;padding:7px 16px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:transparent;cursor:pointer;color:var(--color-text-secondary);">Reset View</button>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+        <span style="font-size:12px;color:var(--color-text-secondary);">FOV</span>
+        <input type="range" id="fov-slider" min="40" max="120" value="75" style="width:80px;">
+        <span id="fov-val" style="font-size:12px;color:var(--color-text-secondary);min-width:28px;">75</span>
+      </div>
+
+      <button onclick="toggleAutoRotate()" id="auto-btn" style="font-size:13px;padding:7px 16px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:transparent;cursor:pointer;color:var(--color-text-secondary);">Auto Rotate: OFF</button>
+    </div>
+
+    <div style="padding:10px 16px;border-top:0.5px solid var(--color-border-tertiary);background:var(--color-background-secondary);">
+      <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:8px;font-weight:500;">Virtual Tour Stops</div>
+      <div id="scene-list" style="display:flex;flex-wrap:wrap;gap:8px;">
+        <button onclick="addScene()" style="font-size:12px;padding:5px 12px;border-radius:var(--border-radius-md);border:0.5px dashed var(--color-border-secondary);background:transparent;cursor:pointer;color:var(--color-text-secondary);">+ Add Stop</button>
+      </div>
+    </div>
+
+    <div style="padding:10px 16px;border-top:0.5px solid var(--color-border-tertiary);background:var(--color-background-primary);">
+      <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:8px;font-weight:500;">Controls</div>
+      <div style="font-size:12px;color:var(--color-text-tertiary);display:flex;flex-wrap:wrap;gap:16px;">
+        <span>Mouse drag — look around</span>
+        <span>Scroll wheel — zoom</span>
+        <span>Touch drag — mobile / Quest 2</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="margin-top:12px;padding:12px 16px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-tertiary);background:var(--color-background-secondary);">
+    <div style="font-size:13px;font-weight:500;color:var(--color-text-primary);margin-bottom:6px;">How to use on Quest 2</div>
+    <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.7;">
+      1. Save your finished HTML file · 2. Upload to GitHub Pages (free) · 3. Open Meta Browser on Quest 2 · 4. Go to your URL · 5. Drag to look around in browser VR mode
+    </div>
+  </div>
+</div>
+
+<script>
+let scene, camera, renderer, sphere, isLoaded = false;
+let isDragging = false, prevMouse = {x:0,y:0};
+let lon = 0, lat = 0, phi = 0, theta = 0;
+let autoRotate = false;
+let fov = 75;
+let animId;
+let scenes = [];
+let currentScene = null;
+
+const canvas = document.getElementById('pano-canvas');
+const wrap = document.getElementById('viewer-wrap');
+
+function initThree() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, wrap.clientWidth / wrap.clientHeight, 0.1, 1000);
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+
+  const geo = new THREE.SphereGeometry(500, 60, 40);
+  geo.scale(-1, 1, 1);
+  const mat = new THREE.MeshBasicMaterial({color: 0x1a1a2e});
+  sphere = new THREE.Mesh(geo, mat);
+  scene.add(sphere);
+
+  animate();
+}
+
+function animate() {
+  animId = requestAnimationFrame(animate);
+  if (autoRotate && isLoaded) lon += 0.05;
+  phi = THREE.MathUtils.degToRad(90 - Math.max(-85, Math.min(85, lat)));
+  theta = THREE.MathUtils.degToRad(lon);
+  camera.position.set(
+    500 * Math.sin(phi) * Math.cos(theta),
+    500 * Math.cos(phi),
+    500 * Math.sin(phi) * Math.sin(theta)
+  );
+  camera.lookAt(scene.position);
+  renderer.render(scene, camera);
+}
+
+function loadTexture(url, name) {
+  const loader = new THREE.TextureLoader();
+  loader.load(url, function(tex) {
+    sphere.material = new THREE.MeshBasicMaterial({map: tex});
+    sphere.material.needsUpdate = true;
+    isLoaded = true;
+    document.getElementById('overlay-msg').style.display = 'none';
+    document.getElementById('drag-hint').style.display = 'block';
+  });
+}
+
+document.getElementById('img-input').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const name = file.name.replace(/\.[^.]+$/, '');
+  loadTexture(url, name);
+  if (!scenes.find(s => s.name === name)) {
+    scenes.push({name, url});
+    renderSceneList();
+  }
+  currentScene = name;
+  renderSceneList();
+});
+
+function renderSceneList() {
+  const list = document.getElementById('scene-list');
+  let html = '';
+  scenes.forEach(s => {
+    const active = s.name === currentScene;
+    html += `<button onclick="switchScene('${s.name}')" style="font-size:12px;padding:5px 12px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:${active?'var(--color-background-info)':'transparent'};cursor:pointer;color:${active?'var(--color-text-info)':'var(--color-text-secondary)'};">${s.name}</button>`;
+  });
+  html += `<button onclick="addScene()" style="font-size:12px;padding:5px 12px;border-radius:var(--border-radius-md);border:0.5px dashed var(--color-border-secondary);background:transparent;cursor:pointer;color:var(--color-text-secondary);">+ Add Stop</button>`;
+  list.innerHTML = html;
+}
+
+function switchScene(name) {
+  const s = scenes.find(x => x.name === name);
+  if (!s) return;
+  currentScene = name;
+  loadTexture(s.url, name);
+  lon = 0; lat = 0;
+  renderSceneList();
+}
+
+function addScene() {
+  document.getElementById('img-input').click();
+}
+
+function resetView() { lon = 0; lat = 0; }
+
+function toggleAutoRotate() {
+  autoRotate = !autoRotate;
+  document.getElementById('auto-btn').textContent = 'Auto Rotate: ' + (autoRotate ? 'ON' : 'OFF');
+}
+
+document.getElementById('fov-slider').addEventListener('input', function() {
+  fov = parseInt(this.value);
+  camera.fov = fov;
+  camera.updateProjectionMatrix();
+  document.getElementById('fov-val').textContent = fov;
+});
+
+canvas.addEventListener('mousedown', e => { isDragging = true; prevMouse = {x: e.clientX, y: e.clientY}; });
+canvas.addEventListener('mouseup', () => isDragging = false);
+canvas.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  lon -= (e.clientX - prevMouse.x) * 0.2;
+  lat += (e.clientY - prevMouse.y) * 0.2;
+  prevMouse = {x: e.clientX, y: e.clientY};
+});
+canvas.addEventListener('wheel', e => {
+  fov = Math.max(30, Math.min(120, fov + e.deltaY * 0.05));
+  camera.fov = fov;
+  camera.updateProjectionMatrix();
+  document.getElementById('fov-slider').value = Math.round(fov);
+  document.getElementById('fov-val').textContent = Math.round(fov);
+});
+
+let touchStart = null;
+canvas.addEventListener('touchstart', e => { touchStart = {x: e.touches[0].clientX, y: e.touches[0].clientY}; });
+canvas.addEventListener('touchmove', e => {
+  if (!touchStart) return;
+  e.preventDefault();
+  lon -= (e.touches[0].clientX - touchStart.x) * 0.3;
+  lat += (e.touches[0].clientY - touchStart.y) * 0.3;
+  touchStart = {x: e.touches[0].clientX, y: e.touches[0].clientY};
+}, {passive: false});
+
+window.addEventListener('resize', () => {
+  if (!renderer) return;
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+  camera.aspect = wrap.clientWidth / wrap.clientHeight;
+  camera.updateProjectionMatrix();
+});
+
+initThree();
+</script>
