@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My 360 Virtual Tour</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0f13; color: #fff; font-family: sans-serif; min-height: 100vh; }
+
+  #header {
+    padding: 14px 20px;
+    background: #1a1a24;
+    border-bottom: 1px solid #2a2a38;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  #header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.5px; flex: 1; min-width: 140px; }
+  #header span { font-size: 12px; color: #888; }
+
+  #viewer-wrap {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 108px);
+    background: #0a0a10;
+    overflow: hidden;
+    min-height: 300px;
+  }
+  #pano-canvas { width: 100%; height: 100%; display: block; }
+
+  #overlay-msg {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 2rem; pointer-events: none;
+  }
+  #overlay-msg .big { font-size: 64px; margin-bottom: 16px; opacity: 0.3; }
+  #overlay-msg .title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+  #overlay-msg .sub { font-size: 14px; color: #888; max-width: 280px; line-height: 1.6; }
+
+  #drag-hint {
+    display: none;
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.6); color: #fff; font-size: 12px;
+    padding: 6px 16px; border-radius: 20px; pointer-events: none; white-space: nowrap;
+  }
+
+  #controls {
+    background: #1a1a24;
+    border-top: 1px solid #2a2a38;
+    padding: 10px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .ctrl-btn {
+    font-size: 13px; padding: 7px 16px;
+    border-radius: 8px; border: 1px solid #3a3a50;
+    background: #252535; cursor: pointer; color: #ccc;
+    transition: background 0.15s;
+  }
+  .ctrl-btn:hover { background: #303045; color: #fff; }
+  .ctrl-btn.active { background: #3a3aaa; border-color: #5555cc; color: #fff; }
+
+  .load-label { cursor: pointer; }
+  .load-label input { display: none; }
+
+  .fov-group {
+    display: flex; align-items: center; gap: 8px; margin-left: auto;
+  }
+  .fov-group span { font-size: 12px; color: #888; }
+  input[type=range] {
+    width: 90px; accent-color: #5555cc;
+  }
+
+  #scene-bar {
+    background: #13131c;
+    padding: 8px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid #2a2a38;
+    min-height: 44px;
+  }
+  .scene-label { font-size: 12px; color: #666; margin-right: 4px; }
+  .scene-btn {
+    font-size: 12px; padding: 4px 12px;
+    border-radius: 20px; border: 1px solid #3a3a50;
+    background: transparent; cursor: pointer; color: #aaa;
+    transition: all 0.15s;
+  }
+  .scene-btn:hover { background: #252535; color: #fff; }
+  .scene-btn.active { background: #3a3aaa; border-color: #5555cc; color: #fff; }
+  .scene-btn.add-btn { border-style: dashed; }
+
+  @media (max-width: 600px) {
+    #viewer-wrap { height: calc(100vh - 140px); }
+    .fov-group { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>My 360 Virtual Tour</h1>
+  <span id="scene-name-display">No image loaded</span>
+</div>
+
+<div id="viewer-wrap">
+  <canvas id="pano-canvas"></canvas>
+
+  <div id="overlay-msg">
+    <div class="big">360</div>
+    <div class="title">Load a 360 panorama image</div>
+    <div class="sub">Click "Load 360 Image" below to open your equirectangular panorama photo</div>
+  </div>
+
+  <div id="drag-hint">drag to look around &nbsp;·&nbsp; scroll to zoom &nbsp;·&nbsp; touch drag on Quest 2</div>
+</div>
+
+<div id="controls">
+  <label class="load-label ctrl-btn">
+    <input type="file" accept="image/*" id="img-input"> Load 360 Image
+  </label>
+  <button class="ctrl-btn" onclick="resetView()">Reset View</button>
+  <button class="ctrl-btn" id="auto-btn" onclick="toggleAutoRotate()">Auto Rotate: OFF</button>
+  <div class="fov-group">
+    <span>FOV</span>
+    <input type="range" id="fov-slider" min="30" max="120" value="75" oninput="setFov(this.value)">
+    <span id="fov-val">75</span>
+  </div>
+</div>
+
+<div id="scene-bar">
+  <span class="scene-label">Tour stops:</span>
+  <button class="scene-btn add-btn" onclick="document.getElementById('img-input').click()">+ Add Stop</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+  let scene, camera, renderer, sphere;
+  let isDragging = false, prevMouse = {x:0, y:0};
+  let lon = 0, lat = 0;
+  let autoRotate = false;
+  let fov = 75;
+  let isLoaded = false;
+  let scenes = [];
+  let currentScene = null;
+
+  const canvas = document.getElementById('pano-canvas');
+  const wrap = document.getElementById('viewer-wrap');
+
+  function init() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(fov, wrap.clientWidth / wrap.clientHeight, 0.1, 1000);
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+
+    const geo = new THREE.SphereGeometry(500, 60, 40);
+    geo.scale(-1, 1, 1);
+    sphere = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x0a0a10 }));
+    scene.add(sphere);
+
+    animate();
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    if (autoRotate && isLoaded) lon += 0.04;
+    const phi = THREE.MathUtils.degToRad(90 - Math.max(-85, Math.min(85, lat)));
+    const theta = THREE.MathUtils.degToRad(lon);
+    camera.position.set(
+      500 * Math.sin(phi) * Math.cos(theta),
+      500 * Math.cos(phi),
+      500 * Math.sin(phi) * Math.sin(theta)
+    );
+    camera.lookAt(scene.position);
+    renderer.render(scene, camera);
+  }
+
+  function loadImage(url, name) {
+    new THREE.TextureLoader().load(url, tex => {
+      sphere.material = new THREE.MeshBasicMaterial({ map: tex });
+      sphere.material.needsUpdate = true;
+      isLoaded = true;
+      document.getElementById('overlay-msg').style.display = 'none';
+      document.getElementById('drag-hint').style.display = 'block';
+      document.getElementById('scene-name-display').textContent = name;
+    });
+  }
+
+  document.getElementById('img-input').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const name = file.name.replace(/\.[^.]+$/, '');
+    if (!scenes.find(s => s.name === name)) {
+      scenes.push({ name, url });
+    }
+    currentScene = name;
+    loadImage(url, name);
+    lon = 0; lat = 0;
+    renderSceneBar();
+    this.value = '';
+  });
+
+  function renderSceneBar() {
+    const bar = document.getElementById('scene-bar');
+    let html = '<span class="scene-label">Tour stops:</span>';
+    scenes.forEach(s => {
+      const active = s.name === currentScene ? ' active' : '';
+      html += `<button class="scene-btn${active}" onclick="switchScene('${s.name}')">${s.name}</button>`;
+    });
+    html += `<button class="scene-btn add-btn" onclick="document.getElementById('img-input').click()">+ Add Stop</button>`;
+    bar.innerHTML = html;
+  }
+
+  function switchScene(name) {
+    const s = scenes.find(x => x.name === name);
+    if (!s) return;
+    currentScene = name;
+    loadImage(s.url, name);
+    lon = 0; lat = 0;
+    renderSceneBar();
+  }
+
+  function resetView() { lon = 0; lat = 0; }
+
+  function toggleAutoRotate() {
+    autoRotate = !autoRotate;
+    document.getElementById('auto-btn').textContent = 'Auto Rotate: ' + (autoRotate ? 'ON' : 'OFF');
+    document.getElementById('auto-btn').classList.toggle('active', autoRotate);
+  }
+
+  function setFov(val) {
+    fov = parseInt(val);
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+    document.getElementById('fov-val').textContent = fov;
+  }
+
+  canvas.addEventListener('mousedown', e => { isDragging = true; prevMouse = {x: e.clientX, y: e.clientY}; });
+  window.addEventListener('mouseup', () => isDragging = false);
+  canvas.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    lon -= (e.clientX - prevMouse.x) * 0.2;
+    lat += (e.clientY - prevMouse.y) * 0.2;
+    prevMouse = {x: e.clientX, y: e.clientY};
+  });
+
+  canvas.addEventListener('wheel', e => {
+    fov = Math.max(30, Math.min(120, fov + e.deltaY * 0.05));
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+    document.getElementById('fov-slider').value = Math.round(fov);
+    document.getElementById('fov-val').textContent = Math.round(fov);
+    e.preventDefault();
+  }, { passive: false });
+
+  let touchStart = null;
+  canvas.addEventListener('touchstart', e => {
+    touchStart = {x: e.touches[0].clientX, y: e.touches[0].clientY};
+  });
+  canvas.addEventListener('touchmove', e => {
+    if (!touchStart) return;
+    e.preventDefault();
+    lon -= (e.touches[0].clientX - touchStart.x) * 0.3;
+    lat += (e.touches[0].clientY - touchStart.y) * 0.3;
+    touchStart = {x: e.touches[0].clientX, y: e.touches[0].clientY};
+  }, { passive: false });
+
+  window.addEventListener('resize', () => {
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+    camera.aspect = wrap.clientWidth / wrap.clientHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  init();
+</script>
+</body>
+</html>
