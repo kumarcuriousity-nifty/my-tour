@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My 360 Virtual Tour</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a10; color:#fff; font-family:sans-serif; overflow:hidden; height:100vh; }
+
+#ui {
+  position:fixed; top:0; left:0; width:100%; z-index:100;
+  background:linear-gradient(to bottom,rgba(0,0,0,0.75),transparent);
+  padding:12px 16px 28px;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+#ui h1 { font-size:14px; font-weight:600; flex:1; }
+#scene-name { font-size:12px; color:#aaa; }
+
+.btn {
+  font-size:12px; padding:6px 14px; border-radius:20px;
+  border:1px solid rgba(255,255,255,0.2);
+  background:rgba(255,255,255,0.08);
+  color:#fff; cursor:pointer; transition:all 0.2s;
+  backdrop-filter:blur(6px);
+}
+.btn:hover { background:rgba(255,255,255,0.18); }
+.btn.vr-btn {
+  background:rgba(80,80,200,0.5);
+  border-color:rgba(120,120,255,0.6);
+  font-weight:600;
+}
+.btn.vr-btn:hover { background:rgba(80,80,200,0.8); }
+.btn.active { background:rgba(80,200,120,0.4); border-color:rgba(80,200,120,0.7); }
+
+#canvas-wrap { width:100vw; height:100vh; position:relative; }
+#pano-canvas { width:100%; height:100%; display:block; }
+
+/* Hotspots */
+.hotspot {
+  position:absolute; transform:translate(-50%,-50%);
+  pointer-events:all; cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; gap:5px;
+}
+.hotspot-circle {
+  width:52px; height:52px; border-radius:50%;
+  background:rgba(80,80,220,0.7);
+  border:2px solid rgba(160,160,255,0.9);
+  display:flex; align-items:center; justify-content:center;
+  font-size:22px;
+  animation:pulse 2s infinite;
+  transition:transform 0.2s;
+  backdrop-filter:blur(4px);
+}
+.hotspot:hover .hotspot-circle { transform:scale(1.15); background:rgba(100,100,255,0.9); }
+.hotspot-label {
+  font-size:11px; font-weight:600;
+  background:rgba(0,0,0,0.65);
+  padding:3px 10px; border-radius:12px;
+  white-space:nowrap; backdrop-filter:blur(4px);
+  border:1px solid rgba(255,255,255,0.15);
+}
+@keyframes pulse {
+  0%,100% { box-shadow:0 0 0 0 rgba(100,100,255,0.5); }
+  50% { box-shadow:0 0 0 12px rgba(100,100,255,0); }
+}
+
+/* Scene bar */
+#scene-bar {
+  position:fixed; bottom:0; left:0; width:100%; z-index:100;
+  background:linear-gradient(to top,rgba(0,0,0,0.85),transparent);
+  padding:28px 16px 14px;
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.scene-dot {
+  font-size:12px; padding:5px 14px; border-radius:20px;
+  border:1px solid rgba(255,255,255,0.2);
+  background:rgba(255,255,255,0.07);
+  color:#ccc; cursor:pointer; transition:all 0.2s;
+}
+.scene-dot:hover { background:rgba(255,255,255,0.15); color:#fff; }
+.scene-dot.active { background:rgba(80,80,200,0.6); border-color:rgba(130,130,255,0.8); color:#fff; font-weight:600; }
+.scene-dot.add { border-style:dashed; color:#888; }
+
+/* Overlay */
+#start-overlay {
+  position:fixed; top:0; left:0; width:100%; height:100%;
+  background:rgba(10,10,20,0.95); z-index:200;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:2rem;
+}
+#start-overlay .big { font-size:72px; margin-bottom:20px; }
+#start-overlay h2 { font-size:22px; font-weight:700; margin-bottom:10px; }
+#start-overlay p { font-size:14px; color:#888; max-width:320px; margin:0 auto 24px; line-height:1.7; }
+.load-area {
+  border:2px dashed rgba(100,100,255,0.5); border-radius:16px;
+  padding:24px 32px; cursor:pointer; margin-bottom:16px;
+  transition:all 0.2s; width:100%; max-width:360px;
+  background:rgba(80,80,200,0.08);
+}
+.load-area:hover { border-color:rgba(120,120,255,0.9); background:rgba(80,80,200,0.15); }
+.load-area p { font-size:13px; color:#aaa; margin:0; }
+.load-area .icon { font-size:36px; margin-bottom:10px; }
+
+/* VR crosshair */
+#crosshair {
+  display:none;
+  position:fixed; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  width:16px; height:16px; z-index:150; pointer-events:none;
+}
+#crosshair::before, #crosshair::after {
+  content:''; position:absolute; background:rgba(255,255,255,0.7);
+  border-radius:2px;
+}
+#crosshair::before { width:2px; height:100%; left:50%; transform:translateX(-50%); }
+#crosshair::after { height:2px; width:100%; top:50%; transform:translateY(-50%); }
+
+/* Loading spinner */
+#loading {
+  display:none; position:fixed; top:50%; left:50%;
+  transform:translate(-50%,-50%); z-index:300;
+  flex-direction:column; align-items:center; gap:12px;
+}
+#loading.show { display:flex; }
+.spinner {
+  width:40px; height:40px; border-radius:50%;
+  border:3px solid rgba(255,255,255,0.1);
+  border-top-color:rgba(100,100,255,0.9);
+  animation:spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* Transition flash */
+#flash {
+  position:fixed; top:0; left:0; width:100%; height:100%;
+  background:#000; opacity:0; pointer-events:none; z-index:190;
+  transition:opacity 0.3s;
+}
+
+input[type=file] { display:none; }
+</style>
+</head>
+<body>
+
+<div id="flash"></div>
+
+<div id="start-overlay">
+  <div class="big">🌐</div>
+  <h2>My 360 Virtual Tour</h2>
+  <p>Load your 360 equirectangular panorama photos to start your immersive tour</p>
+  <label>
+    <input type="file" accept="image/*" multiple id="multi-input">
+    <div class="load-area">
+      <div class="icon">📂</div>
+      <p><strong style="color:#fff;">Click to load 360 images</strong><br>You can select multiple images at once</p>
+    </div>
+  </label>
+  <p style="font-size:11px;color:#555;">JPG or PNG · Equirectangular format · Any resolution</p>
+</div>
+
+<div id="loading"><div class="spinner"></div><span style="font-size:13px;color:#aaa;">Loading...</span></div>
+
+<div id="ui">
+  <h1>🌐 My 360 Virtual Tour</h1>
+  <span id="scene-name">—</span>
+  <label class="btn"><input type="file" accept="image/*" id="add-input"> + Add Image</label>
+  <button class="btn" onclick="resetView()">Reset</button>
+  <button class="btn" id="auto-btn" onclick="toggleAuto()">⟳ Auto</button>
+  <button class="btn vr-btn" id="vr-btn" onclick="enterVR()" style="display:none;">🥽 Enter VR</button>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="pano-canvas"></canvas>
+</div>
+<div id="crosshair"></div>
+
+<div id="scene-bar" style="display:none;">
+  <span style="font-size:11px;color:#666;margin-right:4px;">Rooms:</span>
+  <div id="scene-dots"></div>
+  <label class="scene-dot add"><input type="file" accept="image/*" id="add-input2"> + Add</label>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── State ───────────────────────────────────────────────
+let renderer, scene, camera, sphere;
+let lon=0, lat=0, isDragging=false, prevMx={x:0,y:0};
+let autoRot=false, fov=75, isLoaded=false;
+let scenes=[], currentIdx=0;
+let xrSession=null, xrRefSpace=null;
+let animRunning=false;
+
+const canvas = document.getElementById('pano-canvas');
+const wrap   = document.getElementById('canvas-wrap');
+
+// ─── Init Three.js ────────────────────────────────────────
+function init(){
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(fov, wrap.clientWidth/wrap.clientHeight, 0.1, 2000);
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:false});
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+  renderer.xr.enabled = true;
+
+  const geo = new THREE.SphereGeometry(500,60,40);
+  geo.scale(-1,1,1);
+  sphere = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color:0x0a0a10}));
+  scene.add(sphere);
+
+  animate();
+  checkVRSupport();
+}
+
+function animate(){
+  if(renderer.xr.isPresenting) return; // XR handles its own loop
+  requestAnimationFrame(animate);
+  if(autoRot && isLoaded) lon += 0.04;
+  updateCamera();
+  renderer.render(scene,camera);
+}
+
+function updateCamera(){
+  lat = Math.max(-85, Math.min(85, lat));
+  const phi   = THREE.MathUtils.degToRad(90-lat);
+  const theta = THREE.MathUtils.degToRad(lon);
+  camera.position.set(
+    500*Math.sin(phi)*Math.cos(theta),
+    500*Math.cos(phi),
+    500*Math.sin(phi)*Math.sin(theta)
+  );
+  camera.lookAt(scene.position);
+}
+
+// ─── Texture loading ──────────────────────────────────────
+function loadScene(idx, callback){
+  if(!scenes[idx]) return;
+  showLoading(true);
+  new THREE.TextureLoader().load(scenes[idx].url, tex=>{
+    tex.encoding = THREE.sRGBEncoding;
+    sphere.material = new THREE.MeshBasicMaterial({map:tex});
+    isLoaded=true;
+    showLoading(false);
+    document.getElementById('scene-name').textContent = scenes[idx].name;
+    lon=0; lat=0;
+    currentIdx=idx;
+    renderSceneBar();
+    renderHotspots();
+    if(callback) callback();
+  }, undefined, ()=>{ showLoading(false); alert('Could not load image. Make sure it is a valid 360 equirectangular photo.'); });
+}
+
+// ─── File input handling ──────────────────────────────────
+function handleFiles(files){
+  if(!files.length) return;
+  const startIdx = scenes.length;
+  Array.from(files).forEach(f=>{
+    const name = f.name.replace(/\.[^.]+$/,'');
+    if(!scenes.find(s=>s.name===name)){
+      scenes.push({name, url:URL.createObjectURL(f), hotspots:[]});
+    }
+  });
+  document.getElementById('start-overlay').style.display='none';
+  document.getElementById('scene-bar').style.display='flex';
+  loadScene(startIdx);
+}
+
+document.getElementById('multi-input').addEventListener('change', e=>handleFiles(e.target.files));
+document.getElementById('add-input').addEventListener('change',  e=>{ handleFiles(e.target.files); e.target.value=''; });
+document.getElementById('add-input2').addEventListener('change', e=>{ handleFiles(e.target.files); e.target.value=''; });
+
+// ─── Scene bar ────────────────────────────────────────────
+function renderSceneBar(){
+  const dots = document.getElementById('scene-dots');
+  dots.innerHTML = scenes.map((s,i)=>
+    `<span class="scene-dot${i===currentIdx?' active':''}" onclick="switchTo(${i})">${i+1}. ${s.name}</span>`
+  ).join('');
+}
+
+function switchTo(idx){
+  if(idx===currentIdx) return;
+  flashTransition(()=>loadScene(idx));
+}
+
+// ─── Hotspots ─────────────────────────────────────────────
+/*
+  Each scene stores hotspot definitions: {targetIdx, lon, lat, label}
+  We project the 3D point to screen coords each frame for positioning.
+  Double-click on viewer = add hotspot to current scene.
+*/
+
+let hotspotEls = [];
+
+function renderHotspots(){
+  // remove old
+  hotspotEls.forEach(el=>el.remove());
+  hotspotEls=[];
+  if(!scenes[currentIdx]) return;
+  scenes[currentIdx].hotspots.forEach((h,hi)=>{
+    const el = document.createElement('div');
+    el.className='hotspot';
+    el.innerHTML=`<div class="hotspot-circle">→</div><div class="hotspot-label">${h.label}</div>`;
+    el.addEventListener('click',()=>flashTransition(()=>loadScene(h.targetIdx)));
+    wrap.appendChild(el);
+    hotspotEls.push(el);
+  });
+  updateHotspotPositions();
+}
+
+function updateHotspotPositions(){
+  if(!scenes[currentIdx]) return;
+  const w=wrap.clientWidth, h=wrap.clientHeight;
+  scenes[currentIdx].hotspots.forEach((hs,i)=>{
+    const phi   = THREE.MathUtils.degToRad(90-hs.lat);
+    const theta = THREE.MathUtils.degToRad(hs.lon);
+    const pos = new THREE.Vector3(
+      500*Math.sin(phi)*Math.cos(theta),
+      500*Math.cos(phi),
+      500*Math.sin(phi)*Math.sin(theta)
+    );
+    // check if in front
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    const toHs = pos.clone().normalize();
+    const dot = camDir.dot(toHs);
+    const el = hotspotEls[i];
+    if(!el) return;
+    if(dot < 0.2){ el.style.display='none'; return; }
+    el.style.display='flex';
+    // project
+    const proj = pos.clone().project(camera);
+    const sx = (proj.x*0.5+0.5)*w;
+    const sy = (-proj.y*0.5+0.5)*h;
+    el.style.left = sx+'px';
+    el.style.top  = sy+'px';
+  });
+}
+
+// hotspot update loop
+setInterval(()=>{ if(isLoaded) updateHotspotPositions(); }, 30);
+
+// Add hotspot via double-click
+wrap.addEventListener('dblclick', e=>{
+  if(!isLoaded || scenes.length<2) {
+    alert('Load at least 2 rooms first, then double-click to add a hotspot connecting them.');
+    return;
+  }
+  // figure out current look direction as lon/lat for hotspot placement
+  const hsLon = lon;
+  const hsLat = lat;
+  // pick target
+  const others = scenes.map((s,i)=>i).filter(i=>i!==currentIdx);
+  const names  = others.map(i=>` ${i+1}. ${scenes[i].name}`).join('\n');
+  const answer = prompt(`Double-clicked to add a NAVIGATION HOTSPOT here.\n\nWhich room should this arrow take the viewer to?\nEnter the room number:\n${names}`);
+  if(!answer) return;
+  const targetIdx = parseInt(answer)-1;
+  if(isNaN(targetIdx)||!scenes[targetIdx]) { alert('Invalid room number.'); return; }
+  const label = scenes[targetIdx].name;
+  scenes[currentIdx].hotspots.push({lon:hsLon, lat:hsLat, targetIdx, label});
+  renderHotspots();
+  alert(`Hotspot added! Arrow will take viewer to "${label}". You can add more by double-clicking.`);
+});
+
+// ─── Controls ─────────────────────────────────────────────
+canvas.addEventListener('mousedown', e=>{ isDragging=true; prevMx={x:e.clientX,y:e.clientY}; });
+window.addEventListener('mouseup',   ()=>isDragging=false);
+canvas.addEventListener('mousemove', e=>{
+  if(!isDragging) return;
+  lon -= (e.clientX-prevMx.x)*0.2;
+  lat += (e.clientY-prevMx.y)*0.2;
+  prevMx={x:e.clientX,y:e.clientY};
+});
+canvas.addEventListener('wheel', e=>{
+  fov = Math.max(30,Math.min(110,fov+e.deltaY*0.05));
+  camera.fov=fov; camera.updateProjectionMatrix();
+  e.preventDefault();
+},{passive:false});
+
+let touchStart=null, pinchDist=null;
+canvas.addEventListener('touchstart', e=>{
+  if(e.touches.length===1) touchStart={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  if(e.touches.length===2) pinchDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+});
+canvas.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  if(e.touches.length===1 && touchStart){
+    lon -= (e.touches[0].clientX-touchStart.x)*0.3;
+    lat += (e.touches[0].clientY-touchStart.y)*0.3;
+    touchStart={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  }
+  if(e.touches.length===2 && pinchDist){
+    const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    fov = Math.max(30,Math.min(110,fov-(d-pinchDist)*0.1));
+    camera.fov=fov; camera.updateProjectionMatrix();
+    pinchDist=d;
+  }
+},{passive:false});
+
+function resetView(){ lon=0; lat=0; }
+function toggleAuto(){
+  autoRot=!autoRot;
+  document.getElementById('auto-btn').classList.toggle('active',autoRot);
+}
+
+// ─── WebXR ────────────────────────────────────────────────
+async function checkVRSupport(){
+  if(navigator.xr){
+    const supported = await navigator.xr.isSessionSupported('immersive-vr').catch(()=>false);
+    if(supported) document.getElementById('vr-btn').style.display='block';
+  }
+}
+
+async function enterVR(){
+  if(xrSession){ xrSession.end(); return; }
+  try{
+    xrSession = await navigator.xr.requestSession('immersive-vr',{
+      requiredFeatures:['local'],
+      optionalFeatures:['hand-tracking']
+    });
+    renderer.xr.setSession(xrSession);
+    xrSession.addEventListener('end',()=>{
+      xrSession=null;
+      document.getElementById('vr-btn').textContent='🥽 Enter VR';
+      document.getElementById('crosshair').style.display='none';
+      renderer.setAnimationLoop(null);
+      animate();
+    });
+    document.getElementById('vr-btn').textContent='✕ Exit VR';
+    document.getElementById('crosshair').style.display='block';
+    renderer.setAnimationLoop(()=>renderer.render(scene,camera));
+  } catch(err){
+    alert('VR not available on this device/browser.\n\nOn Quest 2: open in Meta Browser and try again.\n\nError: '+err.message);
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────
+function showLoading(v){ document.getElementById('loading').className=v?'show':''; }
+
+function flashTransition(cb){
+  const f=document.getElementById('flash');
+  f.style.transition='opacity 0.25s';
+  f.style.opacity='1';
+  setTimeout(()=>{
+    cb();
+    setTimeout(()=>{ f.style.opacity='0'; },300);
+  },250);
+}
+
+window.addEventListener('resize',()=>{
+  renderer.setSize(wrap.clientWidth,wrap.clientHeight);
+  camera.aspect=wrap.clientWidth/wrap.clientHeight;
+  camera.updateProjectionMatrix();
+});
+
+init();
+</script>
+</body>
+</html>
